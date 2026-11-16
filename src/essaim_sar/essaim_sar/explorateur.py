@@ -35,7 +35,7 @@ class Explorateur(Node):
         self.declare_parameter('partage', True)
         self.declare_parameter('robots', ['turtle1'])
         self.declare_parameter('portee', 0.0)
-        self.declare_parameter('strategie', 'levy')   # 'levy' ou 'bandes'
+        self.declare_parameter('strategie', 'levy')   # 'levy', 'bandes' ou 'frontiere'
         self.declare_parameter('nb_allees', 10)
 
         self.moi = self.get_namespace().strip('/')
@@ -52,6 +52,8 @@ class Explorateur(Node):
         self.plan_pret = False
         self.points = []          # (x, y, allée terminée en arrivant ici, ou None)
         self.i_point = 0
+                # stratégie frontière
+        self.cible = None         # numéro de la case visée
 
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.pub_case = self.create_publisher(CaseVisitee, '/cases_visitees', 50)
@@ -221,7 +223,15 @@ class Explorateur(Node):
         if self.pose is None:
             return
         p = self.pose
-        if self.get_parameter('strategie').value == 'bandes':
+        strategie = self.get_parameter('strategie').value
+        if strategie == 'frontiere':
+            if self.cible is None or self.visites[self.cible] > 0:
+                self.cible = self.choisir_frontiere(p)
+            if self.cible is not None:
+                self.aller_vers(p, self.cible % TAILLE + 0.5, self.cible // TAILLE + 0.5)
+                return
+            # plus aucune case vide : on continue en Lévy (la suite)
+        if strategie == 'bandes':
             if not self.plan_pret:                 # premier tick : on a enfin notre position
                 self.points = self.chemin(self.mes_allees(), p.x, p.y)
                 self.plan_pret = True
@@ -230,7 +240,6 @@ class Explorateur(Node):
             if self.i_point < len(self.points):
                 self.suivre_bandes(p)
                 return
-            # plus d'allée à faire : on continue en Lévy (la suite)
         # 1. répulsion : s'éloigner des voisins trop proches
         r = self.get_parameter('rayon_repulsion').value
         rx = ry = 0.0
@@ -263,6 +272,34 @@ class Explorateur(Node):
             self.reste -= v * 0.1
         self.pub.publish(cmd)
 
+    # ---------- stratégie frontière ----------
+    def choisir_frontiere(self, p):
+        """Case vide la plus proche dans ma zone (Voronoï), sinon la plus proche tout court."""
+        autres = list(self.voisins_valides())
+        dans_ma_zone = None      # (distance, case)
+        secours = None
+        for c in range(TAILLE * TAILLE):
+            if self.visites[c] > 0:
+                continue                           # déjà fouillée
+            x, y = c % TAILLE + 0.5, c // TAILLE + 0.5
+            d = math.hypot(x - p.x, y - p.y)
+            if secours is None or d < secours[0]:
+                secours = (d, c)
+            if all(math.hypot(x - ox, y - oy) >= d for (ox, oy) in autres):
+                if dans_ma_zone is None or d < dans_ma_zone[0]:
+                    dans_ma_zone = (d, c)
+        choix = dans_ma_zone or secours
+        return None if choix is None else choix[1]
+
+    def aller_vers(self, p, tx, ty):
+        """Tourner vers (tx, ty), avancer si bien orienté, ralentir à l'approche."""
+        dist = math.hypot(tx - p.x, ty - p.y)
+        err = ecart_angle(math.atan2(ty - p.y, tx - p.x), p.theta)
+        cmd = Twist()
+        cmd.angular.z = 4.0 * err
+        if abs(err) < 0.3:
+            cmd.linear.x = min(self.get_parameter('vitesse').value, 2.0 * dist)
+        self.pub.publish(cmd)
 
 def main():
     rclpy.init()
