@@ -93,42 +93,49 @@ class Explorateur(Node):
         return min(0.5 * u ** (-1.0 / (mu - 1.0)), 8.0)
 
     def nouveau_pas(self):
-        """8 candidats, on garde celui qui va vers la case la moins fouillée."""
+        """8 candidats qui restent dans l'arène, on garde la case la moins fouillée."""
         meilleur = None
         for _ in range(8):
             cap = random.uniform(-math.pi, math.pi)
             longueur = self.longueur_levy()
             tx = self.pose.x + longueur * math.cos(cap)
             ty = self.pose.y + longueur * math.sin(cap)
+            if not (0.5 < tx < 10.5 and 0.5 < ty < 10.5):
+                continue                           # sortirait de l'arène
             score = self.visites[case(tx, ty)] + random.random() * 0.5
             if meilleur is None or score < meilleur[0]:
                 meilleur = (score, cap, longueur)
+        if meilleur is None:                       # aucun candidat valable (rare)
+            meilleur = (0, random.uniform(-math.pi, math.pi), 1.0)
         _, self.cap, self.reste = meilleur
-
+        
     def boucle(self):
         if self.pose is None:
             return
         p = self.pose
-        # 1. murs : trop près d'un bord -> viser le centre
-        marge = 1.0
-        if not (marge < p.x < 11.0 - marge and marge < p.y < 11.0 - marge):
-            self.cap = math.atan2(CENTRE - p.y, CENTRE - p.x)
-            self.reste = max(self.reste, 1.0)
-        else:
-            # 2. répulsion : s'éloigner des voisins trop proches
-            r = self.get_parameter('rayon_repulsion').value
-            rx = ry = 0.0
-            for (x, y) in self.voisins_valides():
-                d = math.hypot(p.x - x, p.y - y)
-                if 1e-3 < d < r:
-                    rx += (p.x - x) / d ** 2
-                    ry += (p.y - y) / d ** 2
-            if rx or ry:
-                self.cap = math.atan2(ry, rx)
-                self.reste = max(self.reste, 0.8)
-        # 3. Lévy + carte : pas terminé -> choisir le prochain
+        # 1. répulsion : s'éloigner des voisins trop proches
+        r = self.get_parameter('rayon_repulsion').value
+        rx = ry = 0.0
+        for (x, y) in self.voisins_valides():
+            d = math.hypot(p.x - x, p.y - y)
+            if 1e-3 < d < r:
+                rx += (p.x - x) / d ** 2
+                ry += (p.y - y) / d ** 2
+        if rx or ry:
+            self.cap = math.atan2(ry, rx)
+            self.reste = max(self.reste, 0.8)
+        # 2. Lévy + carte : pas terminé -> choisir le prochain
         if self.reste <= 0.0:
             self.nouveau_pas()
+        # 3. murs en dernier (ils ont le dernier mot) : rebond de billard
+        marge = 0.5
+        if (p.x < marge and math.cos(self.cap) < 0) or \
+           (p.x > 11.0 - marge and math.cos(self.cap) > 0):
+            self.cap = math.pi - self.cap          # mur gauche ou droit
+        if (p.y < marge and math.sin(self.cap) < 0) or \
+           (p.y > 11.0 - marge and math.sin(self.cap) > 0):
+            self.cap = -self.cap                   # mur bas ou haut
+        # 4. tourner vers le cap, avancer si on est bien orienté
         err = ecart_angle(self.cap, p.theta)
         cmd = Twist()
         cmd.angular.z = 4.0 * err
