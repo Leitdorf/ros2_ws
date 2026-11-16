@@ -1,0 +1,13 @@
+nb_robots,partage,panne,graine,victimes,temps_s,couverture_pct
+8,True,aucune,42,5,41.8,87.6
+4,True,aucune,1,5,92.3,89.3
+4,True,aucune,2,5,28.2,60.3
+4,True,aucune,3,5,49.8,84.3
+4,True,aucune,4,5,23.2,62.0
+4,True,aucune,5,5,37.4,80.2
+4,True,turtle2,1,5,83.2,85.1
+4,True,turtle2,2,5,23.2,60.3
+4,True,turtle2,3,5,67.4,87.6
+4,True,turtle2,4,5,24.5,62.8
+4,True,turtle2,5,5,40.4,82.6
+4,True,aucune,0.0,42,5,34.5,81.8

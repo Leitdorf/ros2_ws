@@ -17,7 +17,8 @@ class Base(Node):
         self.declare_parameter('portee', 0.0)
         self.declare_parameter('duree_max', 300.0)
         self.declare_parameter('fichier', os.path.expanduser('~/resultats_sar.csv'))
-
+        self.declare_parameter('strategie', 'levy')
+        
         self.cases = set()
         self.trouvees = set()
         self.debut = self.get_clock().now()
@@ -57,9 +58,10 @@ class Base(Node):
         with open(fichier, 'a', newline='') as f:
             w = csv.writer(f)
             if nouveau:
-                w.writerow(['nb_robots', 'partage', 'panne', 'portee', 'graine',
+                w.writerow(['strategie', 'nb_robots', 'partage', 'panne', 'portee', 'graine',
                             'victimes', 'temps_s', 'couverture_pct'])
-            w.writerow([self.get_parameter('nb_robots').value,
+            w.writerow([self.get_parameter('strategie').value,
+                        self.get_parameter('nb_robots').value,
                         self.get_parameter('partage').value,
                         self.get_parameter('panne').value,
                         self.get_parameter('portee').value,

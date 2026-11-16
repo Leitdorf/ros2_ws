@@ -4,11 +4,14 @@ import random
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Int32
 from turtlesim.msg import Pose
 from mes_interfaces.msg import CaseVisitee
 
-TAILLE = 11          # grille 11 x 11 cases de 1 m
+TAILLE = 11              # grille 11 x 11 cases de 1 m
 CENTRE = 5.5
+LARGEUR = 11.09          # largeur de l'arène turtlesim
+Y_BAS, Y_HAUT = 0.6, 10.5
 
 
 def ecart_angle(a, b):
@@ -32,6 +35,8 @@ class Explorateur(Node):
         self.declare_parameter('partage', True)
         self.declare_parameter('robots', ['turtle1'])
         self.declare_parameter('portee', 0.0)
+        self.declare_parameter('strategie', 'levy')   # 'levy' ou 'bandes'
+        self.declare_parameter('nb_allees', 10)
 
         self.moi = self.get_namespace().strip('/')
         self.pose = None
@@ -40,11 +45,20 @@ class Explorateur(Node):
         self.ma_case = -1
         self.visites = [0] * (TAILLE * TAILLE)
         self.voisins = {}
+        # stratégie bandes
+        self.allees_finies = set()
+        self.proprietaire = self.partage_initial()   # allée -> robot
+        self.morts = set()
+        self.plan_pret = False
+        self.points = []          # (x, y, allée terminée en arrivant ici, ou None)
+        self.i_point = 0
 
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.pub_case = self.create_publisher(CaseVisitee, '/cases_visitees', 50)
+        self.pub_allee = self.create_publisher(Int32, '/allees_finies', 10)
         self.create_subscription(Pose, 'pose', self.cb_pose, 10)
         self.create_subscription(CaseVisitee, '/cases_visitees', self.cb_case, 50)
+        self.create_subscription(Int32, '/allees_finies', self.cb_allee, 10)
         for nom in self.get_parameter('robots').value:
             if nom != self.moi:
                 self.create_subscription(
@@ -72,6 +86,9 @@ class Explorateur(Node):
                 return                                # trop loin : message perdu
         self.visites[msg.index] += 1
 
+    def cb_allee(self, msg):
+        self.allees_finies.add(msg.data)
+
     def cb_voisin(self, nom, msg):
         self.voisins[nom] = (msg.x, msg.y, self.get_clock().now())
 
@@ -86,7 +103,97 @@ class Explorateur(Node):
                 continue                    # trop loin pour la radio
             yield x, y
 
-    # ---------- décisions ----------
+    # ---------- stratégie bandes ----------
+    def partage_initial(self):
+        """Même table chez tous les robots : des blocs d'allées voisines."""
+        robots = self.get_parameter('robots').value
+        nb = self.get_parameter('nb_allees').value
+        n = len(robots)
+        return {k: robots[k * n // nb] for k in range(nb)}
+
+    def mes_allees(self):
+        return sorted(k for k, r in self.proprietaire.items()
+                      if r == self.moi and k not in self.allees_finies)
+
+    def verifier_pannes(self):
+        """Un voisin silencieux depuis plus d'1 s est en panne (traité une seule fois)."""
+        maintenant = self.get_clock().now()
+        for nom, (x, y, instant) in list(self.voisins.items()):
+            if nom not in self.morts and (maintenant - instant).nanoseconds / 1e9 > 1.0:
+                self.morts.add(nom)
+                self.reprendre(nom)
+
+    def reprendre(self, mort):
+        """Réparation locale : les voisins vivants se partagent les allées orphelines."""
+        robots = self.get_parameter('robots').value
+        orphelines = sorted(k for k, r in self.proprietaire.items()
+                            if r == mort and k not in self.allees_finies)
+        i = robots.index(mort)
+        gauche = next((r for r in reversed(robots[:i]) if r not in self.morts), None)
+        droite = next((r for r in robots[i + 1:] if r not in self.morts), None)
+        if gauche and droite:
+            moitie = len(orphelines) // 2
+        elif gauche:
+            moitie = len(orphelines)          # tout pour la gauche
+        else:
+            moitie = 0                        # tout pour la droite
+        for k in orphelines[:moitie]:
+            self.proprietaire[k] = gauche
+        for k in orphelines[moitie:]:
+            self.proprietaire[k] = droite
+        mes_nouvelles = [k for k in orphelines if self.proprietaire[k] == self.moi]
+        msg = f'{mort} en panne, allées orphelines : {orphelines}'
+        if mes_nouvelles:
+            msg += f' -> je reprends {mes_nouvelles}'
+            self.ajouter_au_plan(mes_nouvelles)
+        self.get_logger().warn(msg)
+
+    def ajouter_au_plan(self, allees):
+        """On finit ce qu'on fait, puis on enchaîne sur les nouvelles allées."""
+        reste = self.points[self.i_point:]
+        if reste:
+            x, y = reste[-1][0], reste[-1][1]
+        else:
+            x, y = self.pose.x, self.pose.y
+        self.points = reste + self.chemin(allees, x, y)
+        self.i_point = 0
+
+    def chemin(self, allees, x0, y0):
+        """Points des allées, en partant de (x0, y0) : allée et bout les plus proches d'abord."""
+        if not allees:
+            return []
+        ecart = LARGEUR / self.get_parameter('nb_allees').value
+        x_premiere = (allees[0] + 0.5) * ecart
+        x_derniere = (allees[-1] + 0.5) * ecart
+        if abs(x_derniere - x0) < abs(x_premiere - x0):
+            allees = allees[::-1]
+        monter = y0 < CENTRE
+        points = []
+        for k in allees:
+            x = (k + 0.5) * ecart
+            debut, fin = (Y_BAS, Y_HAUT) if monter else (Y_HAUT, Y_BAS)
+            points += [(x, debut, None), (x, fin, k)]  # l'allée k est finie en arrivant au bout
+            monter = not monter
+        return points
+
+    def suivre_bandes(self, p):
+        tx, ty, allee = self.points[self.i_point]
+        dist = math.hypot(tx - p.x, ty - p.y)
+        cmd = Twist()
+        if dist < 0.2:
+            self.i_point += 1
+            if allee is not None:
+                self.pub_allee.publish(Int32(data=allee))
+            if self.i_point == len(self.points):
+                self.get_logger().info('Mes allées sont finies : je passe en Lévy')
+        else:
+            err = ecart_angle(math.atan2(ty - p.y, tx - p.x), p.theta)
+            cmd.angular.z = 4.0 * err
+            if abs(err) < 0.3:
+                cmd.linear.x = min(self.get_parameter('vitesse').value, 2.0 * dist)
+        self.pub.publish(cmd)
+
+    # ---------- Lévy ----------
     def longueur_levy(self):
         mu = self.get_parameter('mu').value
         u = max(random.random(), 1e-6)
@@ -108,11 +215,22 @@ class Explorateur(Node):
         if meilleur is None:                       # aucun candidat valable (rare)
             meilleur = (0, random.uniform(-math.pi, math.pi), 1.0)
         _, self.cap, self.reste = meilleur
-        
+
+    # ---------- boucle principale ----------
     def boucle(self):
         if self.pose is None:
             return
         p = self.pose
+        if self.get_parameter('strategie').value == 'bandes':
+            if not self.plan_pret:                 # premier tick : on a enfin notre position
+                self.points = self.chemin(self.mes_allees(), p.x, p.y)
+                self.plan_pret = True
+                self.get_logger().info(f'Mes allées : {self.mes_allees()}')
+            self.verifier_pannes()
+            if self.i_point < len(self.points):
+                self.suivre_bandes(p)
+                return
+            # plus d'allée à faire : on continue en Lévy (la suite)
         # 1. répulsion : s'éloigner des voisins trop proches
         r = self.get_parameter('rayon_repulsion').value
         rx = ry = 0.0

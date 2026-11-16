@@ -26,6 +26,7 @@ def lancer(context):
     t_panne = float(LaunchConfiguration('t_panne').perform(context))
     portee = float(LaunchConfiguration('portee').perform(context))
     robots = [f'turtle{i}' for i in range(1, n + 1)]
+    strategie = LaunchConfiguration('strategie').perform(context)
 
     actions = []
     for i, nom in enumerate(robots):
@@ -41,14 +42,14 @@ def lancer(context):
 
     noeuds = [
         Node(package='essaim_sar', executable='explorateur', namespace=nom,
-             parameters=[{'robots': robots, 'partage': partage, 'portee': portee}])
+             parameters=[{'robots': robots, 'partage': partage, 'portee': portee, 'strategie': strategie}])
         for nom in robots
     ]
     noeuds.append(Node(package='essaim_sar', executable='victimes',
                        parameters=[{'robots': robots, 'graine': graine}]))
     noeuds.append(Node(package='essaim_sar', executable='base', output='screen',
                         parameters=[{'nb_robots': n, 'graine': graine, 'partage': partage,
-                                'panne': panne, 'portee': portee}],
+                                'panne': panne, 'portee': portee, 'strategie': strategie}],
                         on_exit=Shutdown()))
     actions.append(TimerAction(period=4.0, actions=noeuds))
 
@@ -68,6 +69,7 @@ def generate_launch_description():
         DeclareLaunchArgument('panne', default_value='aucune'),
         DeclareLaunchArgument('t_panne', default_value='20'),
         DeclareLaunchArgument('portee', default_value='0'),
+        DeclareLaunchArgument('strategie', default_value='levy'),
         Node(package='turtlesim', executable='turtlesim_node'),
         OpaqueFunction(function=lancer),
     ])
