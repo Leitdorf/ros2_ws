@@ -26,5 +26,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Calcul.srv"
   "msg/Etat.msg"
+  "msg/Victime.msg"
+  "msg/CaseVisitee.msg"
 )
 ament_package()
